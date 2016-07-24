@@ -8,6 +8,12 @@ namespace WinFspSharp
 {
     class Program
     {
+        const int FSP_FSCTL_TRANSACT_REQ_SIZEMAX = (4096 - 64); /* 64: size for internal request header */
+        const int FSP_FSCTL_TRANSACT_RSP_SIZEMAX = (4096 - 64); /* symmetry! */
+        const int FSP_FSCTL_TRANSACT_BATCH_BUFFER_SIZEMIN = 16384;
+        const int FSP_FSCTL_TRANSACT_BUFFER_SIZEMIN = FSP_FSCTL_TRANSACT_REQ_SIZEMAX;
+
+
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         public static extern IntPtr CreateFileW(
              [MarshalAs(UnmanagedType.LPWStr)] string filename,
@@ -39,6 +45,9 @@ namespace WinFspSharp
             uint dwFlags,
             [MarshalAs(UnmanagedType.LPWStr)] string lpDeviceName,
             [MarshalAs(UnmanagedType.LPWStr)] string lpTargetPath);
+
+        [DllImport("kernel32.dll")]
+        static extern void RtlZeroMemory(IntPtr dst, int length);
 
         static string EncodeVolumeParams(
             string devicePath,
@@ -143,14 +152,139 @@ namespace WinFspSharp
                 Console.WriteLine("Correctly mounted!");
             }
 
+            DispatcherThread(volumeHandle);
+
             DefineDosDeviceW(
                 DDD_RAW_TARGET_PATH | DDD_REMOVE_DEFINITION | DDD_EXACT_MATCH_ON_REMOVE,
                 "z:", volumeName);
         }
 
+        /*FSP_API NTSTATUS FspFileSystemOpQueryVolumeInformation(
+         * FSP_FILE_SYSTEM* FileSystem,
+            FSP_FSCTL_TRANSACT_REQ* Request, FSP_FSCTL_TRANSACT_RSP* Response)
+        {
+            NTSTATUS Result;
+            FSP_FSCTL_VOLUME_INFO VolumeInfo;
+
+            if (0 == FileSystem->Interface->GetVolumeInfo)
+                return STATUS_INVALID_DEVICE_REQUEST;
+
+            memset(&VolumeInfo, 0, sizeof VolumeInfo);
+            Result = FileSystem->Interface->GetVolumeInfo(FileSystem, Request, &VolumeInfo);
+            if (!NT_SUCCESS(Result))
+                return Result;
+
+            memcpy(&Response->Rsp.QueryVolumeInformation.VolumeInfo, &VolumeInfo, sizeof VolumeInfo);
+            return STATUS_SUCCESS;
+        }*/
+
+        unsafe static void DispatcherThread(IntPtr volumeHandle)
+        {
+            //FSP_FILE_SYSTEM* FileSystem = FileSystem0;
+            long Result;
+            //SIZE_T RequestSize, ResponseSize;
+            //FSP_FSCTL_TRANSACT_REQ* Request = 0;
+            //FSP_FSCTL_TRANSACT_RSP* Response = 0;
+            //HANDLE DispatcherThread = 0;
+
+            IntPtr Request = Marshal.AllocHGlobal(FSP_FSCTL_TRANSACT_BUFFER_SIZEMIN);
+            IntPtr responsePtr = Marshal.AllocHGlobal(FSP_FSCTL_TRANSACT_RSP_SIZEMAX);
+
+            RtlZeroMemory(responsePtr, FSP_FSCTL_TRANSACT_RSP_SIZEMAX);
+
+            try
+            {
+                Response response = new Response();
+                
+                while (true)
+                {
+                    uint RequestSize;
+
+                    if (!DeviceIoControl(volumeHandle,
+                        FSP_FSCTL_TRANSACT(),
+                        responsePtr, response.Size, Request, FSP_FSCTL_TRANSACT_BUFFER_SIZEMIN, out RequestSize, IntPtr.Zero))
+                    {
+                        Console.WriteLine("Error happened");
+                        return;
+                    }
+
+                    RtlZeroMemory(responsePtr, FSP_FSCTL_TRANSACT_RSP_SIZEMAX);
+                    if (0 == RequestSize)
+                        continue;
+
+
+                    RequestCommon requestCommon = (RequestCommon)Marshal.PtrToStructure(Request, typeof(RequestCommon));
+
+                    response.Size = 112;
+                    /*Response->Size = sizeof *Response;*/
+                    response.Kind = requestCommon.Kind;
+                    response.Hint = requestCommon.Hint;
+
+                    if (requestCommon.Kind != RequestKind.QueryVolumeInformationKind)
+                    {
+                        response.IoStatus.Status = STATUS_INVALID_DEVICE_REQUEST;
+
+                        Console.WriteLine("{0} received", requestCommon.Kind);
+                    }
+                    else
+                    {
+                        response.QueryVolumeInformation.FreeSize = 100 * 1024 * 1024;
+                        response.QueryVolumeInformation.TotalSize = 512 * 1024 * 1024;
+
+                        char[] nameArray = "PlasticWinFsp".ToCharArray();
+
+                        int i = 0;
+                        foreach (char c in nameArray)
+                        {
+                            response.QueryVolumeInformation.VolumeLabel[i] = c;
+                        }
+
+                        //Marshal.Copy(nameArray, 0, (IntPtr) response.SetVolumeInformation.VolumeLabel, nameArray.Length);
+
+                        response.QueryVolumeInformation.VolumeLabelLength = (ushort) nameArray.Length;
+                    }
+
+                    /*if (FspFsctlTransactKindCount > Request->Kind && 0 != FileSystem->Operations[Request->Kind])
+                    {
+                        responsePtr->IoStatus.Status =
+                            FspFileSystemEnterOperation(FileSystem, Request, responsePtr);
+                        if (NT_SUCCESS(responsePtr->IoStatus.Status))
+                        {
+                            responsePtr->IoStatus.Status =
+                                FileSystem->Operations[Request->Kind](FileSystem, Request, responsePtr);
+                            FspFileSystemLeaveOperation(FileSystem, Request, responsePtr);
+                        }
+                    }*/
+
+                    Marshal.StructureToPtr(response, responsePtr, false);
+
+                    RtlZeroMemory(responsePtr + 112, FSP_FSCTL_TRANSACT_RSP_SIZEMAX - 112);
+                }
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(responsePtr);
+                Marshal.FreeHGlobal(Request);
+
+                //FspFileSystemSetDispatcherResult(FileSystem, Result);
+
+                //FspFsctlStop(FileSystem->VolumeHandle);
+            }
+        }
+
+        static uint CTL_CODE(uint DeviceType, uint Function, uint Method, uint Access)
+        {
+            return ((DeviceType) << 16) | ((Access) << 14) | ((Function) << 2) | (Method);
+        }
+
         static uint FSP_FSCTL_VOLUME_NAME()
         {
             return (FILE_DEVICE_FILE_SYSTEM << 16) | (FILE_ANY_ACCESS << 14) | ((0x800 + (int)'N') << 2) | METHOD_BUFFERED;
+        }
+
+        static uint FSP_FSCTL_TRANSACT()
+        {
+            return CTL_CODE(FILE_DEVICE_FILE_SYSTEM, 0x800 + (int) 'T', METHOD_BUFFERED, FILE_ANY_ACCESS);
         }
 
         const int FILE_DEVICE_FILE_SYSTEM = 0x00000009;
@@ -160,5 +294,7 @@ namespace WinFspSharp
         // #define FILE_DEVICE_FILE_SYSTEM         0x00000009 // winioctl.h
         // #define METHOD_BUFFERED                 0
         // #define FILE_ANY_ACCESS                 0
+
+        const uint STATUS_INVALID_DEVICE_REQUEST = 0xC0000010;
     }
 }
