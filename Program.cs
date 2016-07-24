@@ -73,11 +73,8 @@ namespace WinFspSharp
 
             string devicePath =
                 EncodeVolumeParams(
-                    @"\\\\?\\GLOBALROOT\\Device\\WinFsp.Disk\\VolumeParams=",
+                    @"\\?\GLOBALROOT\Device\WinFsp.Disk\VolumeParams=",
                     volumeParams);
-
-            // Sample debugging C code:
-            //            0x000000465bfff490 L"\\\\?\\GLOBALROOT\\Device\\WinFsp.Disk\\VolumeParams="
 
             IntPtr volumeHandle = CreateFileW(
                 devicePath, 0, FileShare.ReadWrite, IntPtr.Zero, FileMode.Open, 0x40000000 /*FILE_FLAG_OVERLAPPED*/, IntPtr.Zero);
