@@ -30,6 +30,16 @@ namespace WinFspSharp
             out uint lpBytesReturned,
             IntPtr lpOverlapped);
 
+        internal const uint DDD_RAW_TARGET_PATH = 0x00000001;
+        internal const uint DDD_REMOVE_DEFINITION = 0x00000002;
+        internal const uint DDD_EXACT_MATCH_ON_REMOVE = 0x00000004;
+        internal const uint DDD_NO_BROADCAST_SYSTEM = 0x00000008;
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        internal static extern bool DefineDosDeviceW(
+            uint dwFlags,
+            [MarshalAs(UnmanagedType.LPWStr)] string lpDeviceName,
+            [MarshalAs(UnmanagedType.LPWStr)] string lpTargetPath);
+
         static string EncodeVolumeParams(
             string devicePath,
             VolumeParams volumeParams)
@@ -97,19 +107,11 @@ namespace WinFspSharp
                     return;
                 }
 
-                Console.WriteLine("Unknown error found. {0}",new Win32Exception(error).Message);
+                Console.WriteLine("Unknown error found. {0}", new Win32Exception(error).Message);
                 return;
             }
 
-
-            /* if (INVALID_HANDLE_VALUE == volumeHandle)
-            {
-                Result = FspNtStatusFromWin32(GetLastError());
-                if (STATUS_OBJECT_PATH_NOT_FOUND == Result ||
-                    STATUS_OBJECT_NAME_NOT_FOUND == Result)
-                    Result = STATUS_NO_SUCH_DEVICE;
-                goto exit;
-            }*/
+            string volumeName = string.Empty;
 
             IntPtr volumeNameBuf = Marshal.AllocHGlobal(256);
             uint len;
@@ -127,7 +129,7 @@ namespace WinFspSharp
                     return;
                 }
 
-                string volumeName = Marshal.PtrToStringUni(volumeNameBuf, (int)len);
+                volumeName = Marshal.PtrToStringUni(volumeNameBuf, (int)(len / sizeof(char)));
 
                 Console.WriteLine("VolumeName is: {0}", volumeName);
             }
@@ -136,15 +138,14 @@ namespace WinFspSharp
                 Marshal.FreeHGlobal(volumeNameBuf);
             }
 
-            // and this is the expected output for VolumeName
-            // VolumeName: 0x000001a01eea3d70 L"\\Device\\Volume{bfdf588f-517e-11e6-b318-000c296fed13}"
-            // VolumeNameSize = 256
+            if (DefineDosDeviceW(DDD_RAW_TARGET_PATH, "z:", volumeName))
+            {
+                Console.WriteLine("Correctly mounted!");
+            }
 
-
-            // if (DefineDosDeviceW(DDD_RAW_TARGET_PATH, MountPoint, FileSystem->VolumeName))
-            // #define DDD_RAW_TARGET_PATH         0x00000001 // from WinBase.h
-            // MountPoint = z:
-            // FileSystem.VolumeName = 0x000001a01eea3d70 L"\\Device\\Volume{bfdf588f-517e-11e6-b318-000c296fed13}"
+            DefineDosDeviceW(
+                DDD_RAW_TARGET_PATH | DDD_REMOVE_DEFINITION | DDD_EXACT_MATCH_ON_REMOVE,
+                "z:", volumeName);
         }
 
         static uint FSP_FSCTL_VOLUME_NAME()
